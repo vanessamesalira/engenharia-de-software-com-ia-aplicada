@@ -1,3 +1,4 @@
+import { Rectangle } from 'pixi.js';
 import { buildLayout } from "./layout";
 
 export default async function main(game) {
@@ -14,19 +15,24 @@ export default async function main(game) {
             container.updateHUD(data);
             game.stage.aim.visible = true;
 
-            game.stage.aim.setPosition(data.x, data.y);
-            const position = game.stage.aim.getGlobalPosition();
+            // x/y vêm em pixels da tela; a mira vive no espaço 800x600 do stage
+            const global = { x: data.x, y: data.y };
+            const local = game.stage.toLocal(global);
+            game.stage.aim.setPosition(local.x, local.y);
 
-            game.handleClick({
-                global: position,
-            });
+            game.handleClick({ global });
 
         }
 
     };
 
     setInterval(async () => {
-        const canvas = game.app.renderer.extract.canvas(game.stage);
+        // captura exatamente a área visível, para as coordenadas baterem com a tela
+        const { width, height } = game.app.screen;
+        const canvas = game.app.renderer.extract.canvas({
+            target: game.app.stage,
+            frame: new Rectangle(0, 0, width, height),
+        });
         const bitmap = await createImageBitmap(canvas);
 
         worker.postMessage({

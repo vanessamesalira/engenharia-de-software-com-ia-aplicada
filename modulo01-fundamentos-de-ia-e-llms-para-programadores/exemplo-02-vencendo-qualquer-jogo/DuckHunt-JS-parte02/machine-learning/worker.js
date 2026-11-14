@@ -83,7 +83,8 @@ function* processPrediction({ boxes, scores, classes }, width, height) {
         if (scores[index] < CLASS_THRESHOLD) continue
 
         const label = _labels[classes[index]]
-        if (label !== 'kite') continue
+        // o YOLO (COCO) não tem "pato": os patos aparecem como 'bird' ou 'kite'
+        if (label !== 'kite' && label !== 'bird') continue
 
         let [x1, y1, x2, y2] = boxes.slice(index * 4, (index + 1) * 4)
         x1 *= width

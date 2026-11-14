@@ -6,6 +6,11 @@ document.addEventListener('DOMContentLoaded', async function () {
     spritesheet: 'sprites.json'
   });
   await game.load();
-  await main(game)
+
+  // Abra com ?ai=off para jogar manualmente, sem a IA atirando
+  const aiEnabled = new URLSearchParams(window.location.search).get('ai') !== 'off';
+  if (aiEnabled) {
+    await main(game);
+  }
 
 }, false);
