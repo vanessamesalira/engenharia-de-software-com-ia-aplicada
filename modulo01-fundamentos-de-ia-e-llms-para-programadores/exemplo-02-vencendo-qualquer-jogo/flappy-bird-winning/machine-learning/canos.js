@@ -49,6 +49,18 @@ function ehVerdeDeCano({ r, g, b }) {
   return g > b + 50 && g > r;
 }
 
+// É o contorno preto do cano? A ponta do cano tem uma "tampa" com linhas
+// pretas em volta. Se a busca do vão parasse no preto, acharia o topo ~24 px
+// acima do real (e a IA miraria alto demais, batendo no cano de cima).
+function ehContornoEscuro({ r, g, b }) {
+  return r + g + b < 150;
+}
+
+// Para achar o vão: verde OU contorno preto ainda é "cano".
+function ehParteDoCano(cor) {
+  return ehVerdeDeCano(cor) || ehContornoEscuro(cor);
+}
+
 // Percorre a linha LINHA_BUSCA_Y da esquerda para a direita e devolve onde
 // cada cano começa e termina, ex.: [{ inicio: 300, fim: 444 }, ...]
 //
@@ -84,6 +96,7 @@ function encontrarCanos(pixels) {
 // O pássaro ocupa x de 60 a ~145. Um cano cujo FIM já passou de 60
 // ficou para trás e não importa mais.
 const X_PASSARO = 60;
+const X_FIM_PASSARO = 150; // 60 + 85 de largura (+ uma folga)
 
 function encontrarProximoCano(canos) {
   return canos.find((cano) => cano.fim > X_PASSARO);
@@ -98,38 +111,54 @@ const ALTURA_VAO = 176;
 //   pixels → o "mapa" da tela inteira (900x600), vindo do lerPixels
 //   cano   → o "endereço" do cano: { inicio, fim } (só as bordas no eixo x)
 //
-// Ideia: descer pelo MEIO do cano, um pixel por vez, a partir do topo.
-// Enquanto for verde, ainda estamos no cano de cima. No primeiro pixel que
-// NÃO for verde, o cano de cima acabou: ali começa o vão.
+// Ideia: descer pelo cano, um pixel por vez, a partir do topo.
+// Enquanto for cano (verde ou contorno preto), ainda estamos no cano de cima.
+// No primeiro pixel que NÃO for cano (céu, nuvem...), começa o vão.
 //
 //   y = 10   🟩  cano de cima
 //    ...     🟩
-//   y = 180  🟩
-//   y = 181  ⬜  ← primeiro não-verde = TOPO DO VÃO
+//            ⬛  contorno da tampa (ainda é cano)
+//            🟩  tampa
+//            ⬛  contorno da tampa
+//   y = 181  ⬜  ← primeiro pixel que não é cano = TOPO DO VÃO
+//
+// Por que várias colunas? Algo pode atrapalhar uma coluna (por exemplo, o
+// pássaro, quando o cano passa por cima dele). Olhando em mais de um ponto
+// e ficando com o MAIOR topo, uma coluna boa já basta.
 function encontrarVao(pixels, cano) {
-  // A coluna que vamos "descer": o meio do cano, entre o inicio e o fim.
-  // Pelo meio, para fugir do contorno preto das bordas.
-  // Esse x fica FIXO durante toda a busca.
-  const xMeio = Math.round((cano.inicio + cano.fim) / 2);
+  const largura = cano.fim - cano.inicio;
 
-  // Agora quem muda é o y: começa perto do topo e vai descendo (y++)
+  // Três colunas: a 1/4, 1/2 e 3/4 da largura do cano
+  const colunas = [0.25, 0.5, 0.75].map((p) =>
+    Math.round(cano.inicio + largura * p),
+  );
+
+  const topos = colunas
+    // Pula colunas que passam pelo pássaro: o contorno escuro dele seria
+    // confundido com o contorno do cano
+    .filter((x) => x < X_PASSARO || x > X_FIM_PASSARO)
+    .map((x) => topoDoVaoNaColuna(pixels, x))
+    .filter((t) => t !== null); // descarta coluna que não achou nada
+
+  // Nenhuma coluna serviu (ex.: o cano está bem em cima do pássaro).
+  // Devolve null e o main.js mantém o último vão medido desse cano.
+  if (topos.length === 0) return null;
+
+  const topo = Math.max(...topos);
+  return {
+    topo,
+    fim: topo + ALTURA_VAO,
+    centro: topo + ALTURA_VAO / 2,
+  };
+}
+
+// Desce pela coluna x a partir do topo da tela e devolve o y do primeiro
+// pixel que NÃO é cano (= onde o cano de cima acaba, já incluindo a tampa).
+function topoDoVaoNaColuna(pixels, x) {
   for (let y = LINHA_BUSCA_Y; y < ALTURA_JOGO; y++) {
-    // Pergunta ao "mapa" a cor do ponto (xMeio, y)
-    const cor = corDoPixel(pixels, xMeio, y);
-
-    // "!" significa NÃO: entra aqui quando o pixel NÃO é verde de cano
-    if (!ehVerdeDeCano(cor)) {
-      // Achamos o topo do vão. O resto sai dele, porque o vão tem altura fixa.
-      // O return encerra a função na hora: não olhamos mais nenhum pixel.
-      return {
-        topo: y,
-        fim: y + ALTURA_VAO,
-        centro: y + ALTURA_VAO / 2,
-      };
+    if (!ehParteDoCano(corDoPixel(pixels, x, y))) {
+      return y; // o return encerra na hora: não olha mais nenhum pixel
     }
   }
-
-  // Descemos a tela inteira e foi tudo verde: algo deu errado
-  // (por exemplo, o xMeio caiu fora do cano). Avisamos com null.
-  return null;
+  return null; // desceu a tela inteira e foi tudo verde: algo deu errado
 }

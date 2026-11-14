@@ -46,7 +46,13 @@ function prepararImagem(imagem) {
 
 self.onmessage = async ({ data }) => {
   if (data.type !== "analisar") return;
-  if (!modelo) return; // modelo ainda carregando? ignora
+  // Modelo ainda carregando? Responde com lista vazia em vez de ficar calado:
+  // o main.js espera SEMPRE uma resposta para cada print que manda.
+  if (!modelo) {
+    data.imagem.close();
+    postMessage({ type: "deteccoes", deteccoes: [] });
+    return;
+  }
 
   const entrada = prepararImagem(data.imagem);
   data.imagem.close(); // já virou tensor: libera a imagem da memória
