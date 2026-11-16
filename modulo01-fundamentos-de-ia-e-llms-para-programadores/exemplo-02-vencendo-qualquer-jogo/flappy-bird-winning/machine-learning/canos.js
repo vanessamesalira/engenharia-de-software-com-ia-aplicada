@@ -65,15 +65,19 @@ function ehParteDoCano(cor) {
 // cada cano começa e termina, ex.: [{ inicio: 300, fim: 444 }, ...]
 //
 // A ideia é um "interruptor": dentroDeCano começa desligado.
-//   - não-verde → verde : acabamos de ENTRAR num cano  (anota o inicio)
-//   - verde → não-verde : acabamos de SAIR de um cano  (anota o fim)
+//   - não-cano → cano : acabamos de ENTRAR num cano  (anota o inicio)
+//   - cano → não-cano : acabamos de SAIR de um cano  (anota o fim)
+//
+// "Cano" aqui inclui o contorno preto (ehParteDoCano). Só com o verde, a IA
+// via o cano ~17 px mais estreito do que ele é, achava que ele "já tinha
+// passado" e o pássaro raspava na traseira dele.
 function encontrarCanos(pixels) {
   const canos = [];
   let dentroDeCano = false;
   let inicio = 0;
 
   for (let x = 0; x < LARGURA_JOGO; x++) {
-    const verde = ehVerdeDeCano(corDoPixel(pixels, x, LINHA_BUSCA_Y));
+    const verde = ehParteDoCano(corDoPixel(pixels, x, LINHA_BUSCA_Y));
 
     if (verde && !dentroDeCano) {
       dentroDeCano = true;
@@ -90,16 +94,29 @@ function encontrarCanos(pixels) {
     canos.push({ inicio, fim: LARGURA_JOGO - 1 });
   }
 
-  return canos;
+  // Descarta "canos" estreitos no meio da tela: são os números pretos do
+  // placar desenhados sobre o céu. Um cano de verdade tem ~148 de largura;
+  // só fica estreito quando está entrando/saindo pelas bordas da tela.
+  return canos.filter((c) => {
+    const tocaBorda = c.inicio === 0 || c.fim === LARGURA_JOGO - 1;
+    return tocaBorda || c.fim - c.inicio > LARGURA_MINIMA_CANO;
+  });
 }
 
-// O pássaro ocupa x de 60 a ~145. Um cano cujo FIM já passou de 60
-// ficou para trás e não importa mais.
-const X_PASSARO = 60;
-const X_FIM_PASSARO = 150; // 60 + 85 de largura (+ uma folga)
+const LARGURA_MINIMA_CANO = 100;
+
+// O DESENHO do pássaro ocupa x de ~22 a ~108 (medido no jogo rodando).
+// Usado para não confundir o contorno escuro do pássaro com o do cano.
+const X_PASSARO = 18;
+const X_FIM_PASSARO = 112;
+
+// A COLISÃO dele começa em x ≈ 30. Um cano só "ficou para trás" quando o
+// fim dele passa BEM disso: trocar de alvo cedo demais fazia o pássaro ir
+// atrás do próximo vão ainda raspando na traseira do cano anterior.
+const X_INICIO_COLISAO = 10;
 
 function encontrarProximoCano(canos) {
-  return canos.find((cano) => cano.fim > X_PASSARO);
+  return canos.find((cano) => cano.fim > X_INICIO_COLISAO);
 }
 
 // Pelo código do jogo (js/entities/entities.js), o vão tem sempre 176 de altura

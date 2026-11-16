@@ -4,7 +4,7 @@
 //   layout.js  → criarPreview, desenharPreview
 //   canos.js   → lerPixels, encontrarCanos, encontrarProximoCano, encontrarVao
 //   passaro.js → encontrarPassaro
-//   decisao.js → preverY, devePular  (a regra: pula ou não pula?)
+//   decisao.js → calcularVelocidade, decidir  (a regra: pula ou não pula?)
 //   worker.js  → roda o YOLO (em paralelo, sem travar o jogo)
 //
 // O ciclo completo:
@@ -56,6 +56,31 @@ function iniciarIA() {
   // a velocidade depois dele.
   let leituraAnterior = null;
 
+  // Por quanto tempo dá para confiar na estimativa pela física quando o
+  // YOLO perde o pássaro. Mais que isso, o erro acumulado fica grande demais.
+  const MAX_TEMPO_ESTIMANDO_MS = 400;
+
+  // Diferença máxima aceitável entre a leitura do YOLO e a previsão da física
+  const SALTO_MAXIMO_PX = 60;
+
+  // Pulo marcado para um instante exato (ver decisao.js, regra 3)
+  let puloAgendado = null;
+
+  // Aperta o espaço e registra o pulo.
+  //   yNaHora → onde o centro do pássaro está no momento do pulo
+  function executarPulo(yNaHora) {
+    apertarEspaco();
+    momentoDoUltimoPulo = performance.now();
+    // Referência para depois do pulo: onde o pássaro deve ficar quando a
+    // animação acabar (72 px acima de onde estava). Serve para estimar a
+    // posição e descartar leituras absurdas logo após o pulo.
+    leituraAnterior = {
+      y: yNaHora - ALTURA_PULO,
+      momento: momentoDoUltimoPulo + INICIO_DA_QUEDA_APOS_PULO_MS,
+      velocidade: VELOCIDADE_INICIAL,
+    };
+  }
+
   // Respostas que chegam do worker
   worker.onmessage = ({ data }) => {
     if (data.type === "modelo-carregado") {
@@ -71,43 +96,86 @@ function iniciarIA() {
       // Durante esse tempo o pássaro continuou se mexendo!
       const atrasoMs = Math.round(performance.now() - momentoDoPrint);
 
-      const passaro = encontrarPassaro(data.deteccoes);
-      if (!passaro) return; // a IA não achou o pássaro neste frame
-
       // Este print já mostra o efeito do último pulo? Se não, ele está
       // "desatualizado" e não serve para decidir um pulo novo.
       const printViuUltimoPulo =
         momentoDoPrint > momentoDoUltimoPulo + DURACAO_PULO_MS;
-
-      // Print desatualizado: não decide nada com ele (nem guarda como leitura)
       if (!printViuUltimoPulo) {
-        console.log(`🐦 y=${Math.round(passaro.y)} ⏸️ (print anterior ao pulo)`);
+        console.log("🐦 ⏸️ (print anterior ao pulo)");
         return;
       }
 
-      // Onde o pássaro VAI estar, usando a velocidade desde a leitura anterior
-      const leituraAtual = { y: passaro.y, momento: momentoDoPrint };
-      const yPrevisto = preverY(leituraAtual, leituraAnterior);
+      let passaro = encontrarPassaro(data.deteccoes);
+      let estimado = false;
 
-      const pular = devePular(yPrevisto, ultimoVao);
+      // Leitura impossível? Se o YOLO diz que o pássaro "teleportou" para
+      // longe de onde a física diz que ele deveria estar, provavelmente pegou
+      // outra coisa (cano, chão). Descarta e usa a estimativa abaixo.
+      if (passaro && leituraAnterior) {
+        const dt = momentoDoPrint - leituraAnterior.momento;
+        const esperado = preverColisao(leituraAnterior.y, leituraAnterior.velocidade, dt);
+        if (Math.abs(passaro.y - esperado) > SALTO_MAXIMO_PX) {
+          console.log(`🐦 ❌ leitura descartada: y=${Math.round(passaro.y)}, esperado ~${Math.round(esperado)}`);
+          passaro = null;
+        }
+      }
+
+      // O YOLO às vezes "perde" o pássaro por alguns frames (principalmente
+      // quando ele está caindo de bico para baixo). Em vez de ficar sem
+      // decidir, estimamos onde ele está pela física, a partir da última
+      // leitura boa (como um "piloto automático" curto).
+      if (!passaro && leituraAnterior) {
+        const dt = momentoDoPrint - leituraAnterior.momento;
+        if (dt < MAX_TEMPO_ESTIMANDO_MS) {
+          const y = preverColisao(leituraAnterior.y, leituraAnterior.velocidade, dt);
+          passaro = { y };
+          estimado = true;
+        }
+      }
+      if (!passaro) return; // sem leitura e sem como estimar
+
+      // Velocidade: pela física (tempo desde o último pulo), ver decisao.js
+      const leituraAtual = { y: passaro.y, momento: momentoDoPrint };
+      const velocidade = calcularVelocidade(
+        momentoDoPrint,
+        momentoDoUltimoPulo,
+        leituraAtual,
+        leituraAnterior,
+      );
+      leituraAtual.velocidade = velocidade;
+
+      const { pular, motivo, agendarEmMs } = decidir(
+        { y: passaro.y, velocidade, atrasoMs },
+        ultimoVao,
+      );
+
+      // Chegou informação nova: um pulo agendado antes é cancelado
+      // (a decisão de agora é mais atualizada).
+      clearTimeout(puloAgendado);
+
       if (pular) {
-        apertarEspaco();
-        momentoDoUltimoPulo = performance.now();
-        leituraAnterior = null; // depois do pulo, a velocidade recomeça do zero
+        executarPulo(preverColisao(passaro.y, velocidade, atrasoMs));
       } else {
-        leituraAnterior = leituraAtual;
+        if (!estimado) leituraAnterior = leituraAtual; // só leituras REAIS viram referência
+
+        if (agendarEmMs !== undefined) {
+          // Onde o pássaro vai estar na hora do pulo agendado
+          const yNaHora = preverColisao(passaro.y, velocidade, atrasoMs + agendarEmMs);
+          puloAgendado = setTimeout(() => executarPulo(yNaHora), agendarEmMs);
+        }
       }
 
       console.log(
-        `🐦 y=${Math.round(passaro.y)} → previsto ${Math.round(yPrevisto)}`,
+        `🐦 y=${Math.round(passaro.y)}${estimado ? " (estimado)" : ""} v=${velocidade.toFixed(2)}`,
         ultimoVao ? `🎯 vão ${ultimoVao.topo}–${ultimoVao.fim}` : "🎯 sem cano",
-        pular ? "⬆️ PULA" : "",
+        pular ? `⬆️ PULA (${motivo})` : motivo,
         `⏱️ ${atrasoMs}ms`,
       );
     }
   };
 
-  // A cada 100ms: tira um print, acha o vão pelas cores e manda para o YOLO
+  // Tenta a cada 20ms, mas só tira um print quando o YOLO terminou o anterior.
+  // Assim a IA decide o mais rápido que o YOLO aguentar (~a cada 50-60ms).
   setInterval(async () => {
     if (!modeloPronto) return; // modelo ainda carregando
     if (workerOcupado) return; // YOLO ainda pensando no print anterior
@@ -126,14 +194,17 @@ function iniciarIA() {
       ultimoVao = null; // nenhum cano à frente
     } else {
       // Se não deu para medir agora (ex.: cano em cima do pássaro), mantém o
-      // último vão: o buraco de um cano nunca muda de altura
-      ultimoVao = encontrarVao(pixels, proximo) ?? ultimoVao;
+      // último vão: o buraco de um cano nunca muda de altura.
+      // Junto, guarda ONDE o cano está (em x): a decisão precisa saber se ele
+      // já está em cima do pássaro ou ainda longe.
+      const vao = encontrarVao(pixels, proximo) ?? ultimoVao;
+      ultimoVao = vao && { ...vao, canoInicio: proximo.inicio, canoFim: proximo.fim };
     }
 
     workerOcupado = true;
     momentoDoPrint = agora;
     worker.postMessage({ type: "analisar", imagem: bitmap }, [bitmap]);
-  }, 100);
+  }, 20);
 }
 
 // Tira um "print" do canvas do jogo.

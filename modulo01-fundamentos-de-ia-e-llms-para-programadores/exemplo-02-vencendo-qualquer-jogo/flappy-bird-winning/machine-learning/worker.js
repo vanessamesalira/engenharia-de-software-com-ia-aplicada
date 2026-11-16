@@ -17,7 +17,11 @@ const CAMINHO_MODELO = "yolov5n_web_model/model.json";
 const CAMINHO_LABELS = "yolov5n_web_model/labels.json";
 
 const TAMANHO_ENTRADA = 640; // o YOLO só aceita imagens 640x640
-const CONFIANCA_MINIMA = 0.3; // nota mínima (30%) para considerar uma detecção
+// Nota mínima para considerar uma detecção. Testamos 0.2 para perder menos
+// o pássaro, mas entrava lixo (canos/chão vistos como "pássaro") e a IA
+// pulava na hora errada. 0.3 é o equilíbrio; quando o pássaro some, o
+// main.js estima a posição pela física.
+const CONFIANCA_MINIMA = 0.3;
 
 let modelo = null;
 let labels = []; // nomes das 80 classes: o modelo responde com números, isto traduz
